@@ -1,0 +1,184 @@
+/* ========================================
+   Reading Room - Editorial Design System
+   ======================================== */
+
+/* Mobile Navigation - editorial styling */
+.mobile-nav {
+  @apply hidden fixed top-0 left-0 right-0 bg-surface-secondary border-b border-editorial-border z-[100] shadow-subtle;
+}
+
+.mobile-nav-header {
+  @apply flex justify-between items-center px-5 py-4;
+}
+
+.mobile-nav-title {
+  @apply text-lg font-semibold text-editorial-text tracking-tight;
+}
+
+.mobile-nav-tabs {
+  @apply flex border-t border-editorial-border bg-surface;
+}
+
+.mobile-nav-tab {
+  @apply flex-1 px-3 py-3 bg-transparent border-none text-editorial-muted font-medium text-sm transition-all duration-200 border-b-2 border-transparent;
+}
+
+.mobile-nav-tab.active {
+  @apply text-accent border-b-accent bg-accent-subtle;
+}
+
+.mobile-nav-tab:focus-visible {
+  @apply outline-2 outline-accent outline-offset-[-2px];
+}
+
+/* Empty States - calm and editorial */
+.empty-state-icon {
+  @apply text-5xl mb-4 opacity-30;
+}
+
+.empty-state-title {
+  @apply text-lg font-medium text-editorial-text mb-2;
+}
+
+.empty-state-description {
+  @apply text-sm leading-relaxed text-editorial-muted;
+}
+
+/* Animations */
+.animate-slide-in {
+  animation: slideInUp 0.3s ease;
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.2s ease;
+}
+
+/* Responsive Breakpoints */
+@media (max-width: 1024px) {
+  /* Show mobile nav */
+  .mobile-nav {
+    @apply block;
+  }
+  
+  /* Columns become full-width, hide by default */
+  .column {
+    display: none !important;
+    @apply w-full border-r-0 pt-[120px];
+  }
+  
+  .column.active {
+    display: flex !important;
+  }
+  
+  /* Adjust chat panel for tablets */
+  .chat-panel {
+    @apply max-w-[500px];
+    width: 100% !important;
+  }
+}
+
+/* Mobile - Optimized for small screens */
+@media (max-width: 640px) {
+  .column-inner {
+    padding: 16px !important;
+  }
+  
+  .header {
+    padding: 20px 16px !important;
+    font-size: 1.15rem !important;
+  }
+  
+  button {
+    padding: 10px 16px !important;
+    font-size: 0.9rem !important;
+  }
+  
+  .sort-filter-bar {
+    flex-direction: column !important;
+    gap: 8px !important;
+  }
+  
+  .chat-panel {
+    width: 100% !important;
+    max-width: none !important;
+  }
+  
+  .floating-chat-button {
+    width: 56px !important;
+    height: 56px !important;
+    bottom: 16px !important;
+    right: 16px !important;
+    font-size: 1.3rem !important;
+  }
+  
+  .undo-toast {
+    left: 16px !important;
+    right: 16px !important;
+    transform: none !important;
+    bottom: 16px !important;
+  }
+  
+  .export-success-toast {
+    left: 16px !important;
+    right: 16px !important;
+    top: 80px !important;
+  }
+}
+
+/* Extra Small Devices (390px target) */
+@media (max-width: 420px) {
+  .mobile-nav-header {
+    @apply px-4 py-3;
+  }
+  
+  .mobile-nav-title {
+    @apply text-lg;
+  }
+  
+  .mobile-nav-tab {
+    @apply text-xs py-2.5 px-2;
+  }
+  
+  .column-inner {
+    padding: 12px !important;
+  }
+  
+  .header {
+    font-size: 1rem !important;
+    padding: 16px 12px !important;
+  }
+  
+  input, textarea, select {
+    font-size: 16px !important; /* Prevent zoom on iOS */
+  }
+  
+  .article {
+    padding: 12px 0 !important;
+  }
+  
+  .title-text {
+    font-size: 1rem !important;
+  }
+  
+  .tag {
+    font-size: 0.65rem !important;
+    padding: 4px 8px !important;
+  }
+}
+
+/* Print Styles */
+@media print {
+  .mobile-nav,
+  .floating-chat-button,
+  .chat-panel,
+  .undo-toast,
+  .export-success-toast,
+  button {
+    display: none !important;
+  }
+  
+  .column {
+    display: block !important;
+    page-break-inside: avoid;
+  }
+}
