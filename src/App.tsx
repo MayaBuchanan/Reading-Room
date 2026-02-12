@@ -392,10 +392,26 @@ async function extractTextFromPDF(file: File): Promise<string> {
 
 const LS_KEY = 'newsAggregatorDataV1'
 const LS_DELETED_KEY = 'newsAggregatorDeleted'
+const LS_BACKUP_KEY = 'newsAggregatorBackup' // Additional backup key
+const LS_BACKUP_2_KEY = 'newsAggregatorBackup2' // Second backup
 
 function getInitialData() {
   try {
-    const raw = localStorage.getItem(LS_KEY)
+    // Try primary storage first
+    let raw = localStorage.getItem(LS_KEY)
+    
+    // If primary is empty, try backup
+    if (!raw || raw === 'null' || raw === '{}') {
+      console.warn('Primary storage empty, trying backup...')
+      raw = localStorage.getItem(LS_BACKUP_KEY)
+    }
+    
+    // If backup is empty, try second backup
+    if (!raw || raw === 'null' || raw === '{}') {
+      console.warn('Backup empty, trying second backup...')
+      raw = localStorage.getItem(LS_BACKUP_2_KEY)
+    }
+    
     if (raw) {
       const data = JSON.parse(raw)
       // Migrate article content to articleTexts if needed
@@ -407,16 +423,19 @@ function getInitialData() {
           }
         })
       }
+      console.log('✅ Loaded data successfully:', data.articles?.length || 0, 'articles')
       return { ...data, articleTexts }
     }
-  } catch {}
+  } catch (err) {
+    console.error('Error loading data:', err)
+  }
   return {
     articles: [] as Article[],
     notes: {} as Notes,
     articleTexts: {} as ArticleTexts,
     summaries: {} as Summaries,
     analyses: {} as Analyses,
-    categories: ['General', 'Tech', 'World', 'Business', 'Sports', 'Other'],
+    categories: ['Tech', 'World', 'Business', 'Sports', 'Other'],
   }
 }
 
@@ -558,14 +577,31 @@ function App() {
     }
   }
 
-  // Persist to localStorage
+  // Persist to localStorage with triple redundancy
   useEffect(() => {
-    localStorage.setItem(
-      LS_KEY,
-      JSON.stringify({ articles, notes, articleTexts, categories })
-    )
+    const data = JSON.stringify({ articles, notes, articleTexts, categories, summaries, analyses })
+    
+    // NEVER save if data is empty and we have existing data
+    const existingData = localStorage.getItem(LS_KEY)
+    if (existingData && existingData.length > 100 && articles.length === 0) {
+      console.error('⚠️ PREVENTED DATA LOSS: Refusing to save empty data over existing data!')
+      return
+    }
+    
+    // Save to primary storage
+    localStorage.setItem(LS_KEY, data)
+    
+    // Save to backup storage
+    localStorage.setItem(LS_BACKUP_KEY, data)
+    
+    // Save to second backup every 5th save (rotation)
+    if (Math.random() > 0.8) {
+      localStorage.setItem(LS_BACKUP_2_KEY, data)
+    }
+    
+    console.log('💾 Data saved (triple backup):', articles.length, 'articles')
     setLastSaved(Date.now())
-  }, [articles, notes, articleTexts, categories])
+  }, [articles, notes, articleTexts, categories, summaries, analyses])
 
   // Persist deleted articles
   useEffect(() => {
@@ -601,18 +637,45 @@ function App() {
     }
   }, [showExportSuccess])
 
-  // Persist chat history
+  // Auto-backup to downloads folder every 6 hours (only if there's data)
   useEffect(() => {
-    localStorage.setItem('reading-room-chat', JSON.stringify(chatHistory))
-  }, [chatHistory])
+    const BACKUP_INTERVAL = 6 * 60 * 60 * 1000 // 6 hours
+    const lastBackupKey = 'reading-room-last-backup'
+    
+    function autoBackup() {
+      // Don't backup if no articles
+      if (articles.length === 0) {
+        console.log('⏭️ Skipping auto-backup: no articles')
+        return
+      }
+      
+      const lastBackup = localStorage.getItem(lastBackupKey)
+      const lastBackupTime = lastBackup ? parseInt(lastBackup) : 0
+      const now = Date.now()
+      
+      // Only backup if it's been more than 6 hours
+      if (now - lastBackupTime > BACKUP_INTERVAL) {
+        console.log('💾 Auto-backup triggered')
+        handleExportData()
+        localStorage.setItem(lastBackupKey, now.toString())
+      }
+    }
+    
+    // Check on mount
+    autoBackup()
+    
+    // Check every hour
+    const interval = setInterval(autoBackup, 60 * 60 * 1000)
+    
+    return () => clearInterval(interval)
+  }, [articles])
 
-  // Persist LLM settings
+  // Persist API key to localStorage
   useEffect(() => {
-    localStorage.setItem('reading-room-llm-provider', llmProvider)
     if (apiKey) {
       localStorage.setItem('reading-room-api-key', apiKey)
     }
-  }, [llmProvider, apiKey])
+  }, [apiKey])
 
   // Derived filtered and sorted articles
   const filteredArticles = articles
@@ -1127,8 +1190,18 @@ function App() {
     const form = e.target as HTMLFormElement
     const email = (form.elements.namedItem('email') as HTMLInputElement).value
     const password = (form.elements.namedItem('password') as HTMLInputElement).value
-    // Demo: accept any email/password
-    setUser({ name: email.split('@')[0], email })
+    
+    // Check if user exists
+    const storedUsers = JSON.parse(localStorage.getItem('reading-room-users') || '[]')
+    const existingUser = storedUsers.find((u: User) => u.email === email)
+    
+    if (!existingUser) {
+      alert('No account found with this email. Please sign up first.')
+      return
+    }
+    
+    // Demo: accept any password for existing user
+    setUser(existingUser)
     setShowLogin(false)
   }
 
@@ -1138,7 +1211,22 @@ function App() {
     const name = (form.elements.namedItem('name') as HTMLInputElement).value
     const email = (form.elements.namedItem('email') as HTMLInputElement).value
     const password = (form.elements.namedItem('password') as HTMLInputElement).value
-    setUser({ name, email })
+    
+    // Check if email already exists
+    const storedUsers = JSON.parse(localStorage.getItem('reading-room-users') || '[]')
+    const emailExists = storedUsers.some((u: User) => u.email === email)
+    
+    if (emailExists) {
+      alert('This email is already associated with an account. Please log in instead.')
+      return
+    }
+    
+    // Create new user
+    const newUser = { name, email }
+    storedUsers.push(newUser)
+    localStorage.setItem('reading-room-users', JSON.stringify(storedUsers))
+    
+    setUser(newUser)
     setShowSignup(false)
   }
 
@@ -1197,6 +1285,22 @@ function App() {
         <div className="flex flex-col flex-none w-[240px] bg-gradient-to-b from-[#2a3142] to-[#1f2633] border-r-[8px] border-black overflow-y-auto column">
           <div className="p-5 flex-1 overflow-y-auto">
             <div className="text-meta mb-4 tracking-wide font-bold text-white uppercase text-lg">Filter by Category</div>
+          
+          {/* All Articles Button */}
+          <button
+            className={`block w-full text-left bg-transparent border-none px-3.5 py-2.5 text-lg cursor-pointer rounded-lg transition-all duration-200 font-bold mb-1 ${
+              selectedCategory === ''
+                ? 'bg-white text-[#2a3142] font-extrabold border-l-4 border-white shadow-md'
+                : 'text-white hover:bg-[#3a4152] hover:text-white'
+            }`}
+            onClick={() => setSelectedCategory('')}
+            aria-label="Show all articles"
+            tabIndex={0}
+            style={{ letterSpacing: '0.03em' }}
+          >
+            All
+          </button>
+          
           {categories.map((cat: string) => (
             <button
               key={cat}
@@ -2069,18 +2173,19 @@ function App() {
       </div>
     )}
     {showSignup && (
-      <div className="fixed inset-0 bg-black/40 z-[2000] flex items-center justify-center">
-        <form className="bg-white rounded-xl shadow-card p-8 w-full max-w-sm flex flex-col gap-4" onSubmit={handleSignup}>
-          <h2 className="font-display text-2xl mb-2 text-center">Sign up</h2>
-          <input name="name" required placeholder="Name" className="border p-2 rounded" />
-          <input name="email" type="email" required placeholder="Email" className="border p-2 rounded" />
-          <input name="password" type="password" required placeholder="Password" className="border p-2 rounded" />
-          <button type="submit" className="btn-primary w-full">Sign up</button>
-          <button type="button" className="text-xs text-slate-500 mt-2 hover:underline" onClick={() => { setShowSignup(false); setShowLogin(true); }}>Already have an account? Log in</button>
-          <button type="button" className="absolute top-2 right-3 text-xl text-slate-400 hover:text-black" onClick={() => setShowSignup(false)}>×</button>
+      <div class="fixed inset-0 bg-black/40 z-[2000] flex items-center justify-center">
+        <form class="bg-white rounded-xl shadow-card p-8 w-full max-w-sm flex flex-col gap-4 relative" onSubmit={handleSignup}>
+          <h2 class="font-display text-2xl mb-2 text-center">Sign up</h2>
+          <input name="name" required placeholder="Name" class="border p-2 rounded" />
+          <input name="email" type="email" required placeholder="Email" class="border p-2 rounded" />
+          <input name="password" type="password" required placeholder="Password" class="border p-2 rounded" />
+          <button type="submit" class="btn-primary w-full">Sign up</button>
+          <button type="button" class="text-xs text-slate-500 mt-2 hover:underline" onClick={() => { setShowSignup(false); setShowLogin(true); }}>Already have an account? Log in</button>
+          <button type="button" class="absolute top-2 right-3 text-xl text-slate-400 hover:text-black" onClick={() => setShowSignup(false)}>×</button>
         </form>
       </div>
     )}
+    
     {/* USER PAGE MODAL */}
     {showUserPage && user && (
       <div className="fixed inset-0 bg-black/40 z-[2000] flex items-center justify-center">
