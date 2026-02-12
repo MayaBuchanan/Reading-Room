@@ -23,6 +23,7 @@ interface Article {
   category: string
   addedAt?: number
   status?: 'unread' | 'reading' | 'read'
+  content?: string
 }
 
 interface DeletedArticle extends Article {
@@ -59,6 +60,12 @@ interface ChatMessage {
 
 interface ChatHistory {
   [articleId: string]: ChatMessage[]
+}
+
+// --- AUTH TYPES ---
+interface User {
+  name: string
+  email: string
 }
 
 // Text processing utilities
@@ -389,7 +396,19 @@ const LS_DELETED_KEY = 'newsAggregatorDeleted'
 function getInitialData() {
   try {
     const raw = localStorage.getItem(LS_KEY)
-    if (raw) return JSON.parse(raw)
+    if (raw) {
+      const data = JSON.parse(raw)
+      // Migrate article content to articleTexts if needed
+      const articleTexts = data.articleTexts || {}
+      if (data.articles) {
+        data.articles.forEach((article: Article) => {
+          if (article.content && !articleTexts[article.id]) {
+            articleTexts[article.id] = article.content
+          }
+        })
+      }
+      return { ...data, articleTexts }
+    }
   } catch {}
   return {
     articles: [] as Article[],
@@ -449,6 +468,16 @@ function App() {
     article: null 
   })
   const [showExportSuccess, setShowExportSuccess] = useState<boolean>(false)
+  
+  // Fetch article states
+  const [isFetchingArticle, setIsFetchingArticle] = useState<boolean>(false)
+  const [fetchError, setFetchError] = useState<string | null>(null)
+
+  // Editing states for inline title and category editing
+  const [editingTitle, setEditingTitle] = useState<{ [id: string]: boolean }>({})
+  const [editingCategory, setEditingCategory] = useState<{ [id: string]: boolean }>({})
+  const [tempTitle, setTempTitle] = useState<string>('')
+  const [tempCategory, setTempCategory] = useState<string>('')
 
   // Add article form
   const [form, setForm] = useState({
@@ -457,6 +486,77 @@ function App() {
     source: '',
     category: categories[0] || '',
   })
+  
+  // --- AUTH STATE ---
+  const [user, setUser] = useState<User|null>(null)
+  const [showLogin, setShowLogin] = useState(false)
+  const [showSignup, setShowSignup] = useState(false)
+  const [showUserPage, setShowUserPage] = useState(false)
+
+  // Fetch article from URL
+  async function handleFetchArticle() {
+    if (!form.url.trim()) {
+      setFetchError('Please enter a URL first')
+      return
+    }
+    
+    setIsFetchingArticle(true)
+    setFetchError(null)
+    
+    try {
+      const response = await fetch('/api/article/fetch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ url: form.url.trim() }),
+      })
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to fetch article')
+      }
+      
+      const data = await response.json()
+      
+      // Auto-fill title if empty
+      if (!form.title.trim() && data.title) {
+        setForm({ ...form, title: data.title })
+      }
+      
+      // Auto-fill source if empty
+      if (!form.source.trim() && (data.siteName || data.byline)) {
+        setForm({ ...form, source: data.siteName || data.byline })
+      }
+      
+      // Store the content temporarily - it will be saved with the article
+      const id = Date.now().toString()
+      setArticleTexts({ ...articleTexts, [id]: data.content })
+      
+      // Add the article immediately with content
+      setArticles([
+        { 
+          ...form, 
+          id, 
+          addedAt: Date.now(), 
+          status: 'unread',
+          title: form.title.trim() || data.title,
+          source: form.source.trim() || data.siteName || data.byline || '',
+          content: data.content
+        },
+        ...articles,
+      ])
+      
+      setForm({ ...form, title: '', url: '', source: '' })
+      
+    } catch (error: any) {
+      console.error('Error fetching article:', error)
+      setFetchError(error.message)
+      setTimeout(() => setFetchError(null), 5000)
+    } finally {
+      setIsFetchingArticle(false)
+    }
+  }
 
   // Persist to localStorage
   useEffect(() => {
@@ -569,6 +669,48 @@ function App() {
   // Article selection
   function handleSelectArticle(id: string) {
     setSelectedArticleId(id)
+  }
+
+  // Edit article title
+  function handleStartEditTitle(id: string, currentTitle: string) {
+    setEditingTitle({ [id]: true })
+    setTempTitle(currentTitle)
+  }
+
+  function handleSaveTitle(id: string) {
+    if (tempTitle.trim()) {
+      setArticles(articles.map(a => 
+        a.id === id ? { ...a, title: tempTitle.trim() } : a
+      ))
+    }
+    setEditingTitle({})
+    setTempTitle('')
+  }
+
+  function handleCancelEditTitle() {
+    setEditingTitle({})
+    setTempTitle('')
+  }
+
+  // Edit article category
+  function handleStartEditCategory(id: string, currentCategory: string) {
+    setEditingCategory({ [id]: true })
+    setTempCategory(currentCategory)
+  }
+
+  function handleSaveCategory(id: string) {
+    if (tempCategory.trim()) {
+      setArticles(articles.map(a => 
+        a.id === id ? { ...a, category: tempCategory } : a
+      ))
+    }
+    setEditingCategory({})
+    setTempCategory('')
+  }
+
+  function handleCancelEditCategory() {
+    setEditingCategory({})
+    setTempCategory('')
   }
 
   // Notes update
@@ -979,6 +1121,32 @@ function App() {
     }
   }
 
+  // --- AUTH FORMS ---
+  function handleLogin(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    const form = e.target as HTMLFormElement
+    const email = (form.elements.namedItem('email') as HTMLInputElement).value
+    const password = (form.elements.namedItem('password') as HTMLInputElement).value
+    // Demo: accept any email/password
+    setUser({ name: email.split('@')[0], email })
+    setShowLogin(false)
+  }
+
+  function handleSignup(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    const form = e.target as HTMLFormElement
+    const name = (form.elements.namedItem('name') as HTMLInputElement).value
+    const email = (form.elements.namedItem('email') as HTMLInputElement).value
+    const password = (form.elements.namedItem('password') as HTMLInputElement).value
+    setUser({ name, email })
+    setShowSignup(false)
+  }
+
+  function handleLogout() {
+    setUser(null)
+    setShowUserPage(false)
+  }
+
   // UI
   const selectedArticle = articles.find((a: Article) => a.id === selectedArticleId)
   const selectedSummary = selectedArticleId ? summaries[selectedArticleId] : null
@@ -986,290 +1154,733 @@ function App() {
 
   return (
     <>
-    <div className="flex h-screen font-sans bg-editorial-bg text-editorial-text">
-      {/* Left: Categories/Sources */}
-      <div className="flex flex-col flex-none w-[240px] bg-surface border-r border-editorial-border overflow-y-auto column">
-        <div className="px-6 py-5 bg-surface-secondary border-b border-editorial-border shrink-0">
-          <h1 className="text-editorial-title text-editorial-text font-semibold tracking-tight">Reading Room</h1>
-          <p className="text-meta text-editorial-muted mt-1">Categories & Sources</p>
+    <div className="flex flex-col h-screen font-serif bg-editorial-bg text-editorial-text overflow-hidden">
+      {/* Top Header */}
+      <header className="flex items-center justify-between px-8 py-4 bg-white border-b border-black shrink-0 shadow-sm">
+        {/* Left: Logo */}
+        <div className="flex items-center gap-3">
+          <img src="/vite.svg" alt="Reading Room logo" className="w-10 h-10" aria-label="App logo" />
         </div>
-        <div className="p-5 flex-1 overflow-y-auto">
-          <div className="text-meta mb-4 tracking-wide text-editorial-muted uppercase font-medium">Filter by Category</div>
+        
+        {/* Center: App Name */}
+        <h1 className="text-4xl font-bold text-[#2C2420] tracking-tight font-display italic">
+          Reading Room
+        </h1>
+        
+        {/* Right: Auth Buttons */}
+        <div className="flex items-center gap-3">
+          {user ? (
+            <>
+              <button className="font-sans text-white bg-accent px-4 py-2 rounded hover:bg-accent-dark transition" onClick={() => setShowUserPage(true)}>
+                {user.name}
+              </button>
+              <button className="font-sans text-white border border-white px-4 py-2 rounded hover:bg-slate-100 hover:text-black transition" onClick={handleLogout}>
+                Log out
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="font-sans text-white border border-white px-4 py-2 rounded hover:bg-slate-100 hover:text-black transition" onClick={() => setShowLogin(true)}>
+                Log in
+              </button>
+              <button className="font-sans text-white bg-accent px-4 py-2 rounded hover:bg-accent-dark transition" onClick={() => setShowSignup(true)}>
+                Sign up
+              </button>
+            </>
+          )}
+        </div>
+      </header>
+
+      {/* Main Content Area */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Left: Categories/Sources */}
+        <div className="flex flex-col flex-none w-[240px] bg-gradient-to-b from-[#2a3142] to-[#1f2633] border-r-[8px] border-black overflow-y-auto column">
+          <div className="p-5 flex-1 overflow-y-auto">
+            <div className="text-meta mb-4 tracking-wide font-bold text-white uppercase text-lg">Filter by Category</div>
           {categories.map((cat: string) => (
             <button
               key={cat}
-              className={`block w-full text-left bg-transparent border-none px-3.5 py-2.5 text-base cursor-pointer rounded-lg transition-all duration-200 font-normal mb-1 ${
+              className={`block w-full text-left bg-transparent border-none px-3.5 py-2.5 text-lg cursor-pointer rounded-lg transition-all duration-200 font-bold mb-1 ${
                 selectedCategory === cat
-                  ? 'bg-accent-subtle text-accent font-medium border-l-2 border-accent'
-                  : 'text-editorial-text hover:bg-surface-tertiary hover:text-accent-dark'
+                  ? 'bg-white text-[#2a3142] font-extrabold border-l-4 border-white shadow-md'
+                  : 'text-white hover:bg-[#3a4152] hover:text-white'
               }`}
               onClick={() => setSelectedCategory(selectedCategory === cat ? '' : cat)}
+              aria-label={`Select category ${cat}`}
+              tabIndex={0}
+              style={{ letterSpacing: '0.03em' }}
             >
               {cat}
             </button>
           ))}
-          <button className="w-full mt-5 px-5 py-2.5 bg-[#25477E] text-white font-medium rounded-lg shadow-subtle transition-all duration-200 hover:bg-[#1d3660] hover:shadow-card" onClick={handleAddCategory}>
-            + New Category
-          </button>
-          
-          {/* Auto-save indicator */}
-          <div className="mt-8 text-center">
-            <div className="text-meta text-green-700 font-medium px-3 py-2 bg-green-50 rounded-lg inline-flex items-center gap-1.5 border border-green-200">
-              <span className="text-green-600">✓</span> Saved {getLastSavedText()}
+          <div className="mt-5 mb-8">
+            <div className="bg-[#3a4152] rounded-lg shadow-subtle p-2 flex justify-center items-center">
+              <button className="w-full px-5 py-2.5 bg-white text-[#2a3142] font-bold rounded-lg shadow-subtle transition-all duration-200 hover:bg-slate-100 hover:shadow-card" onClick={handleAddCategory}>
+                + New Category
+              </button>
             </div>
           </div>
-          
-          {/* Export button */}
-          <button className="btn-secondary w-full mt-3" onClick={handleExportData}>
-            📥 Export All Data
-          </button>
+          {/* Auto-save indicator */}
+          <div className="mt-8 text-center">
+            <div className="text-meta text-emerald-300 font-medium px-3 py-2 bg-[#3a4152] rounded-lg inline-flex items-center gap-1.5 border border-[#4a5162]">
+              <span className="text-emerald-400">✓</span> Saved {getLastSavedText()}
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Middle: Article List */}
-      <div className="flex flex-col flex-1 p-0 bg-surface overflow-y-auto column">
-        <div className="px-6 py-5 bg-surface-secondary border-b border-editorial-border shrink-0">
-          <h2 className="text-editorial-title text-editorial-text font-semibold tracking-tight">Articles</h2>
-          <p className="text-meta text-editorial-muted mt-1">Your reading list</p>
-        </div>
-        <div className="p-6 flex-1 overflow-y-auto flex flex-col">
-          <form className="mb-6 pb-6 border-b border-editorial-border" onSubmit={handleAddArticle}>
-            <input
-              className="input-field mb-3"
-              placeholder="Article title"
-              value={form.title}
-              onChange={e => setForm({ ...form, title: e.target.value })}
-              required
-            />
-            <input
-              className="input-field mb-3"
-              placeholder="URL"
-              value={form.url}
-              onChange={e => setForm({ ...form, url: e.target.value })}
-              required
-            />
-            <input
-              className="input-field mb-3"
-              placeholder="Source (optional)"
-              value={form.source}
-              onChange={e => setForm({ ...form, source: e.target.value })}
-            />
-            <select
-              className="input-field mb-3"
-              value={form.category}
-              onChange={e => setForm({ ...form, category: e.target.value })}
-            >
-              {categories.map((cat: string) => (
-                <option key={cat} value={cat}>{cat}</option>
-              ))}
-            </select>
-            <button className="btn-primary w-full mt-0" type="submit">+ Add Article</button>
-          </form>
-          <input
-            className="input-field mb-5"
-            placeholder="🔍 Search articles..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
-          
-          {/* Sort & Filter Controls */}
-          <div className="flex gap-2 mb-4 items-center sort-filter-bar">
-            <label className="text-meta text-editorial-muted font-medium">Sort:</label>
-            <select
-              className="flex-1 px-3 py-2 border border-editorial-border rounded-lg text-sm bg-surface text-editorial-text font-normal cursor-pointer transition-all duration-200 hover:border-accent/50"
-              value={sortBy}
-              onChange={e => setSortBy(e.target.value as any)}
-              title="Sort by"
-            >
-              <option value="date">Date Added</option>
-              <option value="title">Title</option>
-              <option value="source">Source</option>
-            </select>
-            <label className="text-meta text-editorial-muted font-medium">Filter:</label>
-            <select
-              className="flex-1 px-3 py-2 border border-editorial-border rounded-lg text-sm bg-surface text-editorial-text font-normal cursor-pointer transition-all duration-200 hover:border-accent/50"
-              value={filterBy}
-              onChange={e => setFilterBy(e.target.value as any)}
-              title="Filter by"
-            >
-              <option value="all">All Articles</option>
-              <option value="unread">Unread</option>
-              <option value="read">Read</option>
-              <option value="hasNotes">Has Notes</option>
-            </select>
+      {/* CONDITIONAL: Feed Grid View OR Article Detail View */}
+      {!selectedArticleId ? (
+        /* ========================================
+           A) FEED GRID VIEW (No article selected)
+           ======================================== */
+        <div className="flex flex-col flex-1 p-0 bg-white overflow-y-auto column">
+          <div className="px-6 py-5 bg-gradient-to-r from-[#2a3142] to-[#1f2633] border-b border-[#323946] shrink-0 shadow-lg">
+            <h2 className="text-editorial-title text-white font-bold tracking-tight">Articles</h2>
+            <p className="text-meta text-slate-300 mt-1">Your reading list</p>
           </div>
-          
-          <div className="flex-1">
-            {filteredArticles.length === 0 && (
-              <div className="empty-state">
+          <div className="p-6 flex-1 overflow-y-auto space-y-6">
+            {/* Add Article Card */}
+            <div className="bg-white rounded-xl border-2 border-slate-200 shadow-sm p-6">
+              <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wide mb-5">Add Article</h3>
+              <form className="space-y-4" onSubmit={handleAddArticle}>
+                {/* Title and URL - 2 column grid on md+ */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <input
+                    className="input-field"
+                    placeholder="Article title"
+                    value={form.title}
+                    onChange={e => setForm({ ...form, title: e.target.value })}
+                    required
+                  />
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      <input
+                        className="input-field mb-0 flex-1"
+                        placeholder="URL"
+                        value={form.url}
+                        onChange={e => setForm({ ...form, url: e.target.value })}
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={handleFetchArticle}
+                        disabled={isFetchingArticle || !form.url.trim()}
+                        className="px-4 py-2 bg-accent text-white font-medium rounded-lg transition-all duration-200 hover:bg-accent-dark disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                        title="Auto-fetch article content from URL"
+                      >
+                        {isFetchingArticle ? '⏳' : '🔍'} Fetch
+                      </button>
+                    </div>
+                    {fetchError && (
+                      <div role="alert" className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-xs">
+                        <span className="font-semibold">Error:</span> {fetchError}
+                        <button className="ml-2 underline" onClick={handleFetchArticle} aria-label="Retry fetch">Retry</button>
+                      </div>
+                    )}
+                    {isFetchingArticle && (
+                      <div className="text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-3 py-2">
+                        Fetching article content...
+                      </div>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Source and Category - 2 column grid on md+ */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <input
+                    className="input-field"
+                    placeholder="Source (optional)"
+                    value={form.source}
+                    onChange={e => setForm({ ...form, source: e.target.value })}
+                  />
+                  <select
+                    className="input-field"
+                    value={form.category}
+                    onChange={e => setForm({ ...form, category: e.target.value })}
+                  >
+                    {categories.map((cat: string) => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </div>
+                
+                <button className="btn-primary w-full" type="submit">+ Add Article</button>
+              </form>
+            </div>
+            
+            {/* Search/Sort/Filter Toolbar */}
+            <div className="bg-white rounded-xl border-2 border-slate-200 shadow-sm p-6">
+              <div className="space-y-4">
+                <input
+                  className="input-field bg-white text-slate-900"
+                  placeholder="🔍 Search articles..."
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                />
+                
+                {/* Sort & Filter Controls */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="flex items-center gap-3">
+                    <label className="text-sm font-medium text-slate-600 shrink-0">Sort:</label>
+                    <select
+                      className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-700 font-normal cursor-pointer transition-all duration-200 hover:border-accent/50 focus:border-accent focus:ring-2 focus:ring-accent/20"
+                      value={sortBy}
+                      onChange={e => setSortBy(e.target.value as any)}
+                      title="Sort by"
+                    >
+                      <option value="date">Date Added</option>
+                      <option value="title">Title</option>
+                      <option value="source">Source</option>
+                    </select>
+                  </div>
+                  
+                  <div className="flex items-center gap-3">
+                    <label className="text-sm font-medium text-slate-600 shrink-0">Filter:</label>
+                    <select
+                      className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-700 font-normal cursor-pointer transition-all duration-200 hover:border-accent/50 focus:border-accent focus:ring-2 focus:ring-accent/20"
+                      value={filterBy}
+                      onChange={e => setFilterBy(e.target.value as any)}
+                      title="Filter by"
+                    >
+                      <option value="all">All Articles</option>
+                      <option value="unread">Unread</option>
+                      <option value="read">Read</option>
+                      <option value="hasNotes">Has Notes</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            {/* Article Grid */}
+            {filteredArticles.length === 0 ? (
+              <div className="empty-state py-16 text-white">
                 <div className="empty-state-icon">📭</div>
-                <div className="empty-state-title">No articles found</div>
-                <div className="empty-state-description">
+                <div className="empty-state-title text-white">No articles found</div>
+                <div className="empty-state-description text-slate-300">
                   Try adjusting your filters or add a new article above
                 </div>
               </div>
-            )}
-            {filteredArticles.map((a: Article) => (
-              <div
-                key={a.id}
-                className={`p-4 border border-editorial-border cursor-pointer transition-all duration-200 rounded-lg mb-2 article ${
-                  selectedArticleId === a.id
-                    ? 'bg-accent-subtle border-l-[3px] border-accent shadow-card'
-                    : 'bg-surface hover:bg-surface-secondary hover:border-accent/30'
-                }`}
-              >
-                <div onClick={() => handleSelectArticle(a.id)} className="cursor-pointer flex-1">
-                  <div className="text-article-title text-editorial-text mb-2 leading-snug title-text">{a.title}</div>
-                  <div className="text-meta text-editorial-muted flex items-center gap-2 mt-2">
-                    <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-accent hover:text-accent-dark hover:underline transition-colors">{a.source || 'Link'}</a>
-                    <span className="text-editorial-muted">·</span>
-                    <span className="text-xs bg-surface-tertiary text-editorial-muted rounded px-2 py-0.5 font-medium border border-editorial-border">{a.category}</span>
-                  </div>
-                </div>
-                <button 
-                  className="btn-destructive mt-3 text-sm"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    handleDeleteArticle(a.id)
-                  }}
-                  title="Delete article"
-                >
-                  Delete
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Right: Notes/Analysis */}
-      <div className="flex flex-col flex-1 p-0 bg-surface overflow-y-auto border-r-0 column lastColumn">
-        <div className="px-6 py-5 bg-surface-secondary border-b border-editorial-border shrink-0">
-          <h2 className="text-editorial-title text-editorial-text font-semibold tracking-tight">Analysis</h2>
-          <p className="text-meta text-editorial-muted mt-1">Notes & insights</p>
-        </div>
-        {selectedArticle ? (
-          <div className="p-6 flex-1 overflow-y-auto flex flex-col column-inner">
-            <div className="mb-6 pb-6 border-b border-editorial-border">
-              <h3 className="text-article-title text-editorial-text mb-2 leading-snug tracking-tight">{selectedArticle.title}</h3>
-              <div className="text-meta text-editorial-muted flex items-center gap-2">
-                <a href={selectedArticle.url} target="_blank" rel="noopener noreferrer" className="text-accent hover:text-accent-dark hover:underline transition-colors">{selectedArticle.source || selectedArticle.url}</a>
-                <span>·</span>
-                <span className="text-xs bg-surface-tertiary text-editorial-muted rounded px-2 py-0.5 font-medium border border-editorial-border">{selectedArticle.category}</span>
-              </div>
-            </div>
-
-            <div className="mb-6">
-              <label className="block text-base font-medium text-editorial-text mb-3">Your Notes</label>
-              <textarea
-                className="w-full min-h-[100px] p-4 border border-editorial-border rounded-lg text-base mb-3 font-mono resize-y transition-all duration-200 bg-surface text-editorial-text leading-relaxed focus:border-accent focus:ring-2 focus:ring-accent/10"
-                value={selectedArticleId ? notes[selectedArticleId] || '' : ''}
-                onChange={handleNoteChange}
-                placeholder="Write your thoughts and reflections here..."
-              />
-            </div>
-
-            <div className="mb-6">
-              <label className="block text-base font-medium text-editorial-text mb-3">Article Content</label>
-              <input
-                type="file"
-                accept=".pdf"
-                onChange={handlePDFUpload}
-                style={{ display: 'none' }}
-                id="pdf-upload-input"
-              />
-              <button 
-                className="btn-secondary mb-3 inline-flex items-center gap-2"
-                onClick={() => document.getElementById('pdf-upload-input')?.click()}
-                disabled={isLoadingPDF}
-              >
-                {isLoadingPDF ? '⏳ Processing...' : '📎 Upload PDF'}
-              </button>
-              <textarea
-                className="w-full min-h-[140px] p-4 border border-editorial-border rounded-lg text-sm mb-3 font-mono resize-y transition-all duration-200 bg-surface-tertiary text-editorial-text leading-relaxed focus:border-accent focus:ring-2 focus:ring-accent/10"
-                value={selectedArticleId ? articleTexts[selectedArticleId] || '' : ''}
-                onChange={handleArticleTextChange}
-                placeholder="Paste article text or upload a PDF to extract content..."
-              />
-            </div>
-
-            <div className="flex gap-2 mt-2">
-              <button className="btn-primary flex-1" onClick={handleSummarize}>Summarize</button>
-              <button className="btn-primary flex-1" onClick={handleAnalyze}>Analyze</button>
-            </div>
-
-            {selectedSummary && (
-              <div className="mt-8 pt-6 border-t border-editorial-border">
-                <h4 className="text-lg font-semibold mb-4 text-editorial-text">Summary</h4>
-                <div className="text-base mb-4 px-4 py-3 bg-indigo-50 border-l-4 border-accent rounded text-editorial-text leading-relaxed italic">{selectedSummary.tldr}</div>
-                <div className="font-medium text-base text-editorial-text mb-3 mt-5">Key Points</div>
-                <ul className="space-y-2 ml-5">
-                  {selectedSummary.keyPoints.map((pt, i) => (
-                    <li key={i} className="text-sm text-editorial-text leading-relaxed list-disc">{pt}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {selectedAnalysis && (
-              <div className="mt-8 pt-6 border-t border-editorial-border">
-                <h4 className="text-lg font-semibold mb-4 text-editorial-text">Critical Analysis</h4>
-                
-                <div className="mb-5">
-                  <div className="font-medium text-sm text-editorial-muted mb-2 uppercase tracking-wide">Main Claim</div>
-                  <div className="text-sm leading-relaxed text-editorial-text bg-surface-secondary p-3 rounded border border-editorial-border">{selectedAnalysis.mainClaim}</div>
-                </div>
-
-                <div className="mb-5">
-                  <div className="font-medium text-sm text-editorial-muted mb-2 uppercase tracking-wide">Supporting Evidence</div>
-                  <ul className="space-y-2 ml-5">
-                    {selectedAnalysis.evidence.map((e, i) => (
-                      <li key={i} className="text-sm text-editorial-text leading-relaxed list-disc">{e}</li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div className="mb-5">
-                  <div className="font-medium text-sm text-editorial-muted mb-2 uppercase tracking-wide">Assumptions</div>
-                  <ul className="space-y-2 ml-5">
-                    {selectedAnalysis.assumptions.map((a, i) => (
-                      <li key={i} className="text-sm text-editorial-text leading-relaxed list-disc">{a}</li>
-                    ))}
-                  </ul>
-                </div>
-
-                {Object.keys(selectedAnalysis.biasFraming).length > 0 && (
-                  <div className="mb-5">
-                    <div className="font-medium text-sm text-editorial-muted mb-2 uppercase tracking-wide">Loaded Language</div>
-                    <div className="flex flex-wrap gap-2">
-                      {Object.entries(selectedAnalysis.biasFraming).map(([word, count]) => (
-                        <span key={word} className="inline-block bg-amber-50 text-amber-800 px-2.5 py-1 rounded text-xs font-medium border border-amber-200">
-                          {word} ×{count}
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {filteredArticles.map((a: Article) => (
+                  <div
+                    key={a.id}
+                    onClick={() => handleSelectArticle(a.id)}
+                    className="group relative p-6 border-2 rounded-xl cursor-pointer transition-all duration-200 hover:shadow-xl hover:-translate-y-1 bg-[#FCFCFA] border-[#E8E5E1] hover:border-accent/50 text-black"
+                  >
+                    {/* Left Accent Bar - color based on category */}
+                    <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-xl transition-all duration-200 ${
+                      a.category === 'Tech' ? 'bg-blue-500' :
+                      a.category === 'Business' ? 'bg-green-500' :
+                      a.category === 'World' ? 'bg-purple-500' :
+                      a.category === 'Sports' ? 'bg-orange-500' :
+                      'bg-gray-400'
+                    } group-hover:w-1.5`}></div>
+                    
+                    {/* Category Badge */}
+                    <div className="mb-3 flex items-center gap-2">
+                      {editingCategory[a.id] ? (
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={tempCategory}
+                            onChange={(e) => setTempCategory(e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-xs bg-white text-slate-700 rounded-full px-3 py-1.5 font-semibold border border-accent focus:outline-none focus:ring-2 focus:ring-accent/50"
+                          >
+                            {categories.map((cat) => (
+                              <option key={cat} value={cat}>{cat}</option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleSaveCategory(a.id)
+                            }}
+                            className="text-green-600 hover:text-green-700 font-bold"
+                            title="Save"
+                          >
+                            ✓
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleCancelEditCategory()
+                            }}
+                            className="text-red-600 hover:text-red-700 font-bold"
+                            title="Cancel"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <span className={`inline-block text-xs font-semibold rounded-full px-3 py-1 ${
+                            a.category === 'Tech' ? 'bg-blue-50 text-blue-700 border border-blue-200' :
+                            a.category === 'Business' ? 'bg-green-50 text-green-700 border border-green-200' :
+                            a.category === 'World' ? 'bg-purple-50 text-purple-700 border border-purple-200' :
+                            a.category === 'Sports' ? 'bg-orange-50 text-orange-700 border border-orange-200' :
+                            'bg-slate-50 text-slate-700 border border-slate-200'
+                          }`}>
+                            {a.category}
+                          </span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleStartEditCategory(a.id, a.category)
+                            }}
+                            className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-accent transition-opacity text-xs"
+                            title="Edit category"
+                          >
+                            ✏️
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    
+                    {/* Article Title */}
+                    {editingTitle[a.id] ? (
+                      <div className="mb-3">
+                        <input
+                          type="text"
+                          value={tempTitle}
+                          onChange={(e) => setTempTitle(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSaveTitle(a.id)
+                            if (e.key === 'Escape') handleCancelEditTitle()
+                          }}
+                          className="w-full text-lg font-bold text-slate-900 border-2 border-accent rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent/50"
+                          autoFocus
+                        />
+                        <div className="flex gap-2 mt-2">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleSaveTitle(a.id)
+                            }}
+                            className="bg-green-600 text-white px-3 py-1 rounded text-xs hover:bg-green-700 transition-colors font-medium"
+                          >
+                            Save
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleCancelEditTitle()
+                            }}
+                            className="bg-gray-400 text-white px-3 py-1 rounded text-xs hover:bg-gray-500 transition-colors font-medium"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mb-3 flex items-start gap-2">
+                        <h3 className="text-lg font-bold text-slate-900 leading-snug line-clamp-3 group-hover:text-accent transition-colors flex-1">
+                          {a.title}
+                        </h3>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleStartEditTitle(a.id, a.title)
+                          }}
+                          className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-accent transition-opacity shrink-0 mt-1"
+                          title="Edit title"
+                        >
+                          ✏️
+                        </button>
+                      </div>
+                    )}
+                    
+                    {/* Metadata */}
+                    <div className="flex items-center gap-2 text-xs text-slate-500 mb-4">
+                      <span className="truncate font-medium">{a.source || 'Unknown'}</span>
+                      {a.addedAt && (
+                        <>
+                          <span>·</span>
+                          <span className="shrink-0">{new Date(a.addedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                        </>
+                      )}
+                    </div>
+                    
+                    {/* Status Badge */}
+                    {a.status && (
+                      <div className="mb-4">
+                        <span className={`inline-block text-xs rounded-md px-2.5 py-1 font-semibold ${
+                          a.status === 'read' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                          a.status === 'reading' ? 'bg-sky-50 text-sky-700 border border-sky-200' :
+                          'bg-slate-50 text-slate-700 border border-slate-200'
+                        }`}>
+                          {a.status === 'read' ? '✓ Read' : a.status === 'reading' ? '📖 Reading' : '📄 Unread'}
                         </span>
-                      ))}
+                      </div>
+                    )}
+                    
+                    {/* Actions */}
+                    <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-200">
+                      <a 
+                        href={a.url} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-xs text-blue-600 hover:text-blue-500 hover:underline transition-colors font-semibold flex items-center gap-1"
+                      >
+                        View Source <span className="text-[10px]">→</span>
+                      </a>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleDeleteArticle(a.id)
+                        }}
+                        className="text-xs text-red-600 hover:text-red-500 hover:underline transition-colors font-semibold"
+                        title="Delete article"
+                      >
+                        Delete
+                      </button>
                     </div>
                   </div>
-                )}
-
-                <div>
-                  <div className="font-medium text-sm text-editorial-muted mb-2 uppercase tracking-wide">Critical Questions</div>
-                  <ul className="space-y-2 ml-5">
-                    {selectedAnalysis.questions.map((q, i) => (
-                      <li key={i} className="text-sm text-editorial-text leading-relaxed list-disc">{q}</li>
-                    ))}
-                  </ul>
-                </div>
+                ))}
               </div>
             )}
           </div>
-        ) : (
-          <div className="p-12 flex-1 flex flex-col justify-center items-center text-center empty-state">
-            <div className="text-5xl mb-5 opacity-30">📄</div>
-            <div className="text-editorial-text text-base font-medium mb-2">No article selected</div>
-            <div className="text-editorial-muted text-sm max-w-xs">Select an article from your reading list to view notes, summaries, and analysis.</div>
+        </div>
+      ) : (
+        /* ========================================
+           B) ARTICLE DETAIL VIEW (Article selected)
+           ======================================== */
+        selectedArticle && (
+          <div className="flex flex-1 overflow-x-auto overflow-y-hidden">
+            {/* Left: Article Reader */}
+            <div className="flex flex-col flex-none w-full lg:w-1/2 min-w-[600px] p-0 bg-[#FDFCFB] overflow-y-auto column">
+              <div className="px-6 py-5 bg-[#E8E5E1] border-b border-[#D4CFC8] shrink-0 flex items-center justify-between">
+                <button
+                  onClick={() => setSelectedArticleId(null)}
+                  className="flex items-center gap-2 text-accent hover:text-accent-dark transition-colors cursor-pointer font-medium"
+                >
+                  <span className="text-lg">←</span>
+                  <span>Back to Feed</span>
+                </button>
+              </div>
+
+              <div className="p-6 flex-1 overflow-y-auto">
+                {/* Article Header */}
+                <div className="mb-8">
+                  {/* Title - Editable */}
+                  {editingTitle[selectedArticle.id] ? (
+                    <div className="mb-4">
+                      <input
+                        type="text"
+                        value={tempTitle}
+                        onChange={(e) => setTempTitle(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleSaveTitle(selectedArticle.id)
+                          if (e.key === 'Escape') handleCancelEditTitle()
+                        }}
+                        className="w-full text-3xl font-bold text-[#2C2420] border-2 border-accent rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent/50"
+                        autoFocus
+                      />
+                      <div className="flex gap-3 mt-3">
+                        <button
+                          onClick={() => handleSaveTitle(selectedArticle.id)}
+                          className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors font-medium"
+                        >
+                          Save Title
+                        </button>
+                        <button
+                          onClick={handleCancelEditTitle}
+                          className="bg-gray-400 text-white px-4 py-2 rounded-lg hover:bg-gray-500 transition-colors font-medium"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-start gap-3 mb-4">
+                      <h1 className="text-3xl font-bold text-[#2C2420] leading-tight flex-1">{selectedArticle.title}</h1>
+                      <button
+                        onClick={() => handleStartEditTitle(selectedArticle.id, selectedArticle.title)}
+                        className="text-[#6B6057] hover:text-accent transition-colors shrink-0 mt-2"
+                        title="Edit title"
+                      >
+                        ✏️
+                      </button>
+                    </div>
+                  )}
+                  
+                  {/* Metadata */}
+                  <div className="flex items-center gap-3 text-sm text-[#6B6057] flex-wrap mb-4">
+                    <a href={selectedArticle.url} target="_blank" rel="noopener noreferrer" className="text-accent hover:text-accent-dark hover:underline transition-colors font-medium">
+                      {selectedArticle.source || 'View Source'} →
+                    </a>
+                    <span>·</span>
+                    
+                    {/* Category - Editable */}
+                    {editingCategory[selectedArticle.id] ? (
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={tempCategory}
+                          onChange={(e) => setTempCategory(e.target.value)}
+                          className="text-xs bg-white text-[#6B6057] rounded-full px-3 py-1.5 font-medium border border-accent focus:outline-none focus:ring-2 focus:ring-accent/50"
+                        >
+                          {categories.map((cat) => (
+                            <option key={cat} value={cat}>{cat}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => handleSaveCategory(selectedArticle.id)}
+                          className="text-green-600 hover:text-green-700 font-bold"
+                          title="Save"
+                        >
+                          ✓
+                        </button>
+                        <button
+                          onClick={handleCancelEditCategory}
+                          className="text-red-600 hover:text-red-700 font-bold"
+                          title="Cancel"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <span className="inline-block text-xs bg-[#E8E5E1] text-[#6B6057] rounded-full px-3 py-1.5 font-medium border border-[#D4CFC8]">
+                          {selectedArticle.category}
+                        </span>
+                        <button
+                          onClick={() => handleStartEditCategory(selectedArticle.id, selectedArticle.category)}
+                          className="text-[#6B6057] hover:text-accent transition-colors"
+                          title="Edit category"
+                        >
+                          ✏️
+                        </button>
+                      </div>
+                    )}
+                    
+                    {selectedArticle.addedAt && (
+                      <>
+                        <span>·</span>
+                        <span>{new Date(selectedArticle.addedAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Article Content */}
+                <div className="mb-8">
+                  <label className="block text-lg font-semibold text-[#2C2420] mb-4">Article Content</label>
+                  <input
+                    type="file"
+                    accept=".pdf"
+                    onChange={handlePDFUpload}
+                    style={{ display: 'none' }}
+                    id="pdf-upload-input-detail"
+                  />
+                  <button 
+                    className="btn-secondary mb-4 inline-flex items-center gap-2"
+                    onClick={() => document.getElementById('pdf-upload-input-detail')?.click()}
+                    disabled={isLoadingPDF}
+                  >
+                    {isLoadingPDF ? '⏳ Processing...' : '📎 Upload PDF'}
+                  </button>
+                  <textarea
+                    className="w-full min-h-[400px] p-5 border border-[#D4CFC8] rounded-lg text-base font-serif resize-y transition-all duration-200 bg-white text-[#2C2420] leading-relaxed focus:border-accent focus:ring-2 focus:ring-accent/10"
+                    value={selectedArticleId ? articleTexts[selectedArticleId] || '' : ''}
+                    onChange={handleArticleTextChange}
+                    placeholder="Paste article text or upload a PDF to extract content..."
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Right: Analysis Dashboard */}
+            <div className="flex flex-col flex-none w-full lg:w-1/2 min-w-[600px] p-0 bg-gradient-to-b from-[#2a3142] to-[#1f2633] overflow-y-auto border-l border-black column lastColumn">
+              <div className="px-6 py-5 bg-gradient-to-r from-[#2a3142] to-[#1f2633] border-b border-[#323946] shrink-0 sticky top-0 z-10">
+                <h2 className="text-xl text-white font-bold tracking-tight">Analysis Dashboard</h2>
+                <p className="text-sm text-slate-300 mt-1">Notes, summaries & insights</p>
+              </div>
+
+              <div className="p-6 flex-1 overflow-y-auto space-y-6">
+                {/* Notes Card */}
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-xl font-semibold text-slate-900">📝 Your Notes</h3>
+                    <span className="text-xs text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full font-medium">Auto-saved</span>
+                  </div>
+                  <textarea
+                    className="w-full min-h-[140px] p-4 border border-slate-200 rounded-lg text-sm resize-y transition-all duration-200 bg-white text-slate-900 leading-relaxed focus:border-blue-400 focus:ring-2 focus:ring-blue-100 focus:outline-none placeholder:text-slate-400"
+                    value={selectedArticleId ? notes[selectedArticleId] || '' : ''}
+                    onChange={handleNoteChange}
+                    placeholder="Write your thoughts, reflections, and key takeaways here..."
+                  />
+                  
+                  {/* Action Bar */}
+                  <div className="flex items-center gap-2 mt-4 pt-4 border-t border-slate-100">
+                    <button 
+                      className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-md hover:bg-blue-700 transition-colors"
+                      onClick={handleSummarize}
+                    >
+                      ✨ Summarize
+                    </button>
+                    <button 
+                      className="px-3 py-1.5 bg-purple-600 text-white text-xs font-medium rounded-md hover:bg-purple-700 transition-colors"
+                      onClick={handleAnalyze}
+                    >
+                      🔍 Analyze
+                    </button>
+                    <div className="ml-auto text-xs text-slate-400">
+                      {notes[selectedArticleId || ''] ? `${notes[selectedArticleId || ''].length} characters` : 'No notes yet'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Results Grid (2-column on desktop, stacked on mobile) */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Summary Card */}
+                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+                    <div className="flex items-center gap-2 mb-5">
+                      <span className="text-2xl">📝</span>
+                      <h3 className="text-lg font-semibold text-slate-900">Summary</h3>
+                    </div>
+                    
+                    {selectedSummary ? (
+                      <div className="space-y-5">
+                        {/* TL;DR */}
+                        <div>
+                          <div className="text-xs font-semibold text-blue-600 uppercase tracking-wide mb-2">TL;DR</div>
+                          <div className="text-sm text-slate-800 leading-relaxed bg-blue-50 border-l-4 border-blue-500 p-4 rounded-r-lg">
+                            "{selectedSummary.tldr}"
+                          </div>
+                        </div>
+                        
+                        {/* Key Points */}
+                        <div>
+                          <div className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-3">Key Points</div>
+                          <ul className="space-y-2.5">
+                            {selectedSummary.keyPoints.map((pt, i) => (
+                              <li key={i} className="flex gap-3 text-sm text-slate-700 leading-relaxed">
+                                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-bold mt-0.5">
+                                  {i + 1}
+                                </span>
+                                <span className="flex-1">{pt}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="py-12 text-center">
+                        <div className="text-5xl mb-3 opacity-10">📝</div>
+                        <p className="text-sm text-slate-500 font-medium mb-1">No summary yet</p>
+                        <p className="text-xs text-slate-400">Click "✨ Summarize" to generate</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Critical Analysis Card */}
+                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+                    <div className="flex items-center gap-2 mb-5">
+                      <span className="text-2xl">🔍</span>
+                      <h3 className="text-lg font-semibold text-slate-900">Analysis</h3>
+                    </div>
+                    
+                    {selectedAnalysis ? (
+                      <div className="space-y-5">
+                        {/* Main Claim */}
+                        <div>
+                          <div className="text-xs font-semibold text-purple-600 uppercase tracking-wide mb-2">Main Claim</div>
+                          <div className="text-sm text-slate-800 leading-relaxed bg-purple-50 p-3 rounded-lg border-l-4 border-purple-500">
+                            {selectedAnalysis.mainClaim}
+                          </div>
+                        </div>
+
+                        {/* Supporting Evidence */}
+                        <div>
+                          <div className="text-xs font-semibold text-green-600 uppercase tracking-wide mb-2">Evidence</div>
+                          <ul className="space-y-2">
+                            {selectedAnalysis.evidence.slice(0, 3).map((e, i) => (
+                              <li key={i} className="flex gap-2 text-sm text-slate-700 leading-relaxed">
+                                <span className="text-green-600 flex-shrink-0 mt-0.5 font-bold">✓</span>
+                                <span className="flex-1">{e}</span>
+                              </li>
+                            ))}
+                          </ul>
+                          {selectedAnalysis.evidence.length > 3 && (
+                            <button className="text-xs text-blue-600 hover:text-blue-700 mt-2 font-medium hover:underline">
+                              Show {selectedAnalysis.evidence.length - 3} more →
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Assumptions */}
+                        <div>
+                          <div className="text-xs font-semibold text-amber-600 uppercase tracking-wide mb-2">Assumptions</div>
+                          <ul className="space-y-2">
+                            {selectedAnalysis.assumptions.slice(0, 3).map((a, i) => (
+                              <li key={i} className="flex gap-2 text-sm text-slate-700 leading-relaxed">
+                                <span className="text-amber-600 flex-shrink-0 mt-0.5 font-bold">⚠</span>
+                                <span className="flex-1">{a}</span>
+                              </li>
+                            ))}
+                          </ul>
+                          {selectedAnalysis.assumptions.length > 3 && (
+                            <button className="text-xs text-blue-600 hover:text-blue-700 mt-2 font-medium hover:underline">
+                              Show {selectedAnalysis.assumptions.length - 3} more →
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Loaded Language */}
+                        {Object.keys(selectedAnalysis.biasFraming).length > 0 && (
+                          <div>
+                            <div className="text-xs font-semibold text-orange-600 uppercase tracking-wide mb-2">Loaded Language</div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {Object.entries(selectedAnalysis.biasFraming).slice(0, 6).map(([word, count]) => (
+                                <span key={word} className="inline-flex items-center gap-1 bg-orange-50 text-orange-700 px-2.5 py-1 rounded-md text-xs font-medium border border-orange-200">
+                                  {word} <span className="text-orange-600 font-bold">×{count}</span>
+                                </span>
+                              ))}
+                            </div>
+                            {Object.keys(selectedAnalysis.biasFraming).length > 6 && (
+                              <button className="text-xs text-blue-600 hover:text-blue-700 mt-2 font-medium hover:underline">
+                                Show {Object.keys(selectedAnalysis.biasFraming).length - 6} more →
+                              </button>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Critical Questions */}
+                        <div>
+                          <div className="text-xs font-semibold text-indigo-600 uppercase tracking-wide mb-2">Questions</div>
+                          <ul className="space-y-2">
+                            {selectedAnalysis.questions.slice(0, 3).map((q, i) => (
+                              <li key={i} className="flex gap-2 text-sm text-slate-700 leading-relaxed">
+                                <span className="text-indigo-600 flex-shrink-0 mt-0.5 font-bold">?</span>
+                                <span className="flex-1">{q}</span>
+                              </li>
+                            ))}
+                          </ul>
+                          {selectedAnalysis.questions.length > 3 && (
+                            <button className="text-xs text-blue-600 hover:text-blue-700 mt-2 font-medium hover:underline">
+                              Show {selectedAnalysis.questions.length - 3} more →
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="py-12 text-center">
+                        <div className="text-5xl mb-3 opacity-10">🔍</div>
+                        <p className="text-sm text-slate-500 font-medium mb-1">No analysis yet</p>
+                        <p className="text-xs text-slate-400">Click "🔍 Analyze" to generate</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
-        )}
-      </div>
+        )
+      )}
     </div>
 
     {/* Floating Chat Button */}
@@ -1418,6 +2029,8 @@ function App() {
       </div>
     </div>
     
+    </div> {/* End Main Content Area */}
+    
     {/* Undo Delete Toast */}
     {undoToast.show && undoToast.article && (
       <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-surface border border-editorial-border text-editorial-text px-6 py-4 rounded-lg shadow-card flex items-center gap-4 z-[1001] text-sm">
@@ -1439,6 +2052,48 @@ function App() {
       <div className="fixed top-6 right-6 bg-green-50 border border-green-200 text-green-800 px-5 py-3.5 rounded-lg shadow-card z-[1002] text-sm font-medium flex items-center gap-2">
         <span className="text-green-600">✓</span>
         <span>Data exported successfully</span>
+      </div>
+    )}
+
+    {/* AUTH MODALS */}
+    {showLogin && (
+      <div className="fixed inset-0 bg-black/40 z-[2000] flex items-center justify-center">
+        <form className="bg-white rounded-xl shadow-card p-8 w-full max-w-sm flex flex-col gap-4" onSubmit={handleLogin}>
+          <h2 className="font-display text-2xl mb-2 text-center">Log in</h2>
+          <input name="email" type="email" required placeholder="Email" className="border p-2 rounded" />
+          <input name="password" type="password" required placeholder="Password" className="border p-2 rounded" />
+          <button type="submit" className="btn-primary w-full">Log in</button>
+          <button type="button" className="text-xs text-slate-500 mt-2 hover:underline" onClick={() => { setShowLogin(false); setShowSignup(true); }}>No account? Sign up</button>
+          <button type="button" className="absolute top-2 right-3 text-xl text-slate-400 hover:text-black" onClick={() => setShowLogin(false)}>×</button>
+        </form>
+      </div>
+    )}
+    {showSignup && (
+      <div className="fixed inset-0 bg-black/40 z-[2000] flex items-center justify-center">
+        <form className="bg-white rounded-xl shadow-card p-8 w-full max-w-sm flex flex-col gap-4" onSubmit={handleSignup}>
+          <h2 className="font-display text-2xl mb-2 text-center">Sign up</h2>
+          <input name="name" required placeholder="Name" className="border p-2 rounded" />
+          <input name="email" type="email" required placeholder="Email" className="border p-2 rounded" />
+          <input name="password" type="password" required placeholder="Password" className="border p-2 rounded" />
+          <button type="submit" className="btn-primary w-full">Sign up</button>
+          <button type="button" className="text-xs text-slate-500 mt-2 hover:underline" onClick={() => { setShowSignup(false); setShowLogin(true); }}>Already have an account? Log in</button>
+          <button type="button" className="absolute top-2 right-3 text-xl text-slate-400 hover:text-black" onClick={() => setShowSignup(false)}>×</button>
+        </form>
+      </div>
+    )}
+    {/* USER PAGE MODAL */}
+    {showUserPage && user && (
+      <div className="fixed inset-0 bg-black/40 z-[2000] flex items-center justify-center">
+        <div className="bg-white rounded-xl shadow-card p-8 w-full max-w-md flex flex-col gap-4 relative">
+          <button className="absolute top-2 right-3 text-xl text-slate-400 hover:text-black" onClick={() => setShowUserPage(false)}>×</button>
+          <h2 className="font-display text-2xl mb-2 text-center">User Profile</h2>
+          <div className="flex flex-col gap-2 items-center">
+            <div className="rounded-full bg-slate-200 w-20 h-20 flex items-center justify-center text-4xl mb-2">👤</div>
+            <div className="font-serif text-lg font-semibold">{user.name}</div>
+            <div className="text-slate-500">{user.email}</div>
+          </div>
+          <button className="btn-primary mt-4" onClick={handleLogout}>Log out</button>
+        </div>
       </div>
     )}
     </>

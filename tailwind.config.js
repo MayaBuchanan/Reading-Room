@@ -32,9 +32,10 @@ export default {
         },
       },
       fontFamily: {
-        sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', '"Helvetica Neue"', 'Arial', 'sans-serif'],
-        serif: ['Charter', 'Georgia', 'Cambria', '"Times New Roman"', 'serif'],
-        mono: ['"SF Mono"', 'Monaco', '"Cascadia Code"', '"Roboto Mono"', 'Consolas', 'monospace'],
+        sans: ['Helvetica Neue', 'Helvetica', 'Arial', 'sans-serif'],
+        serif: ['Georgia', 'Garamond', 'Baskerville', 'Times New Roman', 'serif'],
+        display: ['Playfair Display', 'Didot', 'Bodoni MT', 'Times New Roman', 'serif'],
+        mono: ['Courier New', 'Courier', 'monospace'],
       },
       fontSize: {
         'editorial-title': ['1.75rem', { lineHeight: '2.25rem', letterSpacing: '-0.025em', fontWeight: '600' }],
