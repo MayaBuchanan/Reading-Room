@@ -1189,7 +1189,6 @@ function App() {
     e.preventDefault()
     const form = e.target as HTMLFormElement
     const email = (form.elements.namedItem('email') as HTMLInputElement).value
-    const password = (form.elements.namedItem('password') as HTMLInputElement).value
     
     // Check if user exists
     const storedUsers = JSON.parse(localStorage.getItem('reading-room-users') || '[]')
@@ -1210,7 +1209,6 @@ function App() {
     const form = e.target as HTMLFormElement
     const name = (form.elements.namedItem('name') as HTMLInputElement).value
     const email = (form.elements.namedItem('email') as HTMLInputElement).value
-    const password = (form.elements.namedItem('password') as HTMLInputElement).value
     
     // Check if email already exists
     const storedUsers = JSON.parse(localStorage.getItem('reading-room-users') || '[]')
@@ -2173,15 +2171,15 @@ function App() {
       </div>
     )}
     {showSignup && (
-      <div class="fixed inset-0 bg-black/40 z-[2000] flex items-center justify-center">
-        <form class="bg-white rounded-xl shadow-card p-8 w-full max-w-sm flex flex-col gap-4 relative" onSubmit={handleSignup}>
-          <h2 class="font-display text-2xl mb-2 text-center">Sign up</h2>
-          <input name="name" required placeholder="Name" class="border p-2 rounded" />
-          <input name="email" type="email" required placeholder="Email" class="border p-2 rounded" />
-          <input name="password" type="password" required placeholder="Password" class="border p-2 rounded" />
-          <button type="submit" class="btn-primary w-full">Sign up</button>
-          <button type="button" class="text-xs text-slate-500 mt-2 hover:underline" onClick={() => { setShowSignup(false); setShowLogin(true); }}>Already have an account? Log in</button>
-          <button type="button" class="absolute top-2 right-3 text-xl text-slate-400 hover:text-black" onClick={() => setShowSignup(false)}>×</button>
+      <div className="fixed inset-0 bg-black/40 z-[2000] flex items-center justify-center">
+        <form className="bg-white rounded-xl shadow-card p-8 w-full max-w-sm flex flex-col gap-4 relative" onSubmit={handleSignup}>
+          <h2 className="font-display text-2xl mb-2 text-center">Sign up</h2>
+          <input name="name" required placeholder="Name" className="border p-2 rounded" />
+          <input name="email" type="email" required placeholder="Email" className="border p-2 rounded" />
+          <input name="password" type="password" required placeholder="Password" className="border p-2 rounded" />
+          <button type="submit" className="btn-primary w-full">Sign up</button>
+          <button type="button" className="text-xs text-slate-500 mt-2 hover:underline" onClick={() => { setShowSignup(false); setShowLogin(true); }}>Already have an account? Log in</button>
+          <button type="button" className="absolute top-2 right-3 text-xl text-slate-400 hover:text-black" onClick={() => setShowSignup(false)}>×</button>
         </form>
       </div>
     )}
