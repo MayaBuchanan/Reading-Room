@@ -1,6 +1,6 @@
 # Reading Room - Personal News Aggregator 📚
 
-A professional news aggregator MVP with intelligent article management, note-taking, PDF upload, and **AI-powered chat** for discussing articles. Built with React, TypeScript, and Vite.
+A news aggregator MVP with intelligent article management, note-taking, PDF upload, and **AI-powered chat** for discussing articles. Built with React, TypeScript, and Vite.
 
 ## ✨ Features
 
